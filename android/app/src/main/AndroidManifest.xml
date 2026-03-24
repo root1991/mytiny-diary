@@ -6,7 +6,7 @@
     <!-- Optional: only if you need background location updates -->
     <!-- <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" /> -->
     <application
-        android:label="myapp"
+        android:label="MyTinyDiary"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true">

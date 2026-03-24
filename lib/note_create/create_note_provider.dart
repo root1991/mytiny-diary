@@ -5,8 +5,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:myapp/data/note_repository.dart';
-import 'package:myapp/models/note.dart';
+import 'package:mytiny_diary/data/note_repository.dart';
+import 'package:mytiny_diary/models/note.dart';
 import 'package:geocoding/geocoding.dart' as geocoding;
 import 'package:record/record.dart';
 
@@ -33,6 +33,7 @@ class CreateNoteState {
   final double? latitude;
   final double? longitude;
   final XFile? imageFile;
+  final String? existingPhotoPath; // pre-saved photo for edit mode
   final String? audioPath;
   final bool isListening; // retained but always false now
   final bool isSaving;
@@ -48,6 +49,7 @@ class CreateNoteState {
     this.latitude,
     this.longitude,
     this.imageFile,
+    this.existingPhotoPath,
     this.audioPath,
     this.isListening = false,
     this.isSaving = false,
@@ -78,6 +80,7 @@ class CreateNoteState {
     double? latitude,
     double? longitude,
     XFile? imageFile,
+    String? existingPhotoPath,
     String? audioPath,
     bool? isListening,
     bool? isSaving,
@@ -93,10 +96,10 @@ class CreateNoteState {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       imageFile: imageFile ?? this.imageFile,
+      existingPhotoPath: existingPhotoPath ?? this.existingPhotoPath,
       audioPath: audioPath ?? this.audioPath,
       isListening: isListening ?? this.isListening,
       isSaving: isSaving ?? this.isSaving,
-      // new optionals (fallback to false if null in initial)
       // ignore: prefer_if_null_operators
       isRecording: isRecording ?? this.isRecording,
       isTranscribing: isTranscribing ?? this.isTranscribing,
@@ -114,19 +117,36 @@ final createNoteProvider =
 class CreateNoteNotifier extends StateNotifier<CreateNoteState> {
   final TextEditingController _controller = TextEditingController();
   final ImagePicker _picker = ImagePicker();
-  // (Removed live speech_to_text fields)
   final AudioRecorder _recorder = AudioRecorder();
   sherpa.OfflineRecognizer? _whisper;
   bool _whisperReady = false;
-  bool _sherpaInitialized = false; // ensures global native init only once
+  bool _sherpaInitialized = false;
 
-  // (Austrian hotwords removed)
+  int? _editingId;
+  DateTime? _originalCreatedAt;
+  bool get isEditing => _editingId != null;
 
   TextEditingController get controller => _controller;
 
   CreateNoteNotifier() : super(CreateNoteState.initial()) {
     _controller.text = state.transcribedText;
     _getCurrentLocation();
+  }
+
+  void loadExistingNote(Note note) {
+    _editingId = note.id;
+    _originalCreatedAt = note.createdAt;
+    final mood = Mood.values[note.mood.clamp(0, Mood.values.length - 1)];
+    state = CreateNoteState(
+      transcribedText: note.text,
+      selectedMood: mood,
+      location: note.location ?? '',
+      latitude: note.latitude,
+      longitude: note.longitude,
+      existingPhotoPath: note.photo,
+      audioPath: note.audioPath.isEmpty ? null : note.audioPath,
+    );
+    _controller.text = note.text;
   }
 
   @override
@@ -149,7 +169,7 @@ class CreateNoteNotifier extends StateNotifier<CreateNoteState> {
     );
   }
 
-  // Save the note
+  // Save the note (create or update)
   Future<Note> saveNote() async {
     state = state.copyWith(isSaving: true);
     try {
@@ -166,6 +186,8 @@ class CreateNoteNotifier extends StateNotifier<CreateNoteState> {
         final destPath = p.join(imagesDir.path, fileName);
         await File(state.imageFile!.path).copy(destPath);
         persistedPhotoPath = destPath;
+      } else {
+        persistedPhotoPath = state.existingPhotoPath;
       }
 
       // Ensure coordinates present
@@ -196,6 +218,7 @@ class CreateNoteNotifier extends StateNotifier<CreateNoteState> {
       final moodInt = Mood.values.indexOf(state.selectedMood);
 
       final note = Note(
+        id: _editingId,
         text: state.transcribedText,
         audioPath: state.audioPath ?? '',
         photo: persistedPhotoPath,
@@ -203,11 +226,18 @@ class CreateNoteNotifier extends StateNotifier<CreateNoteState> {
         latitude: lat,
         longitude: lng,
         mood: moodInt,
+        createdAt: _originalCreatedAt,
       );
 
-      final saved = await NoteRepository.instance.insert(note);
-      debugPrint('Note saved: ${saved.id}');
-      return saved;
+      if (_editingId != null) {
+        await NoteRepository.instance.update(note);
+        debugPrint('Note updated: ${note.id}');
+        return note;
+      } else {
+        final saved = await NoteRepository.instance.insert(note);
+        debugPrint('Note saved: ${saved.id}');
+        return saved;
+      }
     } finally {
       state = state.copyWith(isSaving: false);
     }
